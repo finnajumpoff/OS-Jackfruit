@@ -214,24 +214,33 @@ The `boilerplate/` folder will contain starter files for the runtime, kernel mon
 
 ### Submission Package
 
-Submit a GitHub repository containing (You can structure the repo however you want, these are what we expect there to be):
+Submit a GitHub repository containing:
 
-1. `engine.c`
-2. `monitor.c`
-3. `monitor_ioctl.h`
+#### Source Files
+
+We expect you to copy the boilerplate and work on top of that, but you may then structure the repository however you want, but the following must be present:
+
+1. `engine.c` — user-space runtime and supervisor
+2. `monitor.c` — kernel-space memory monitor (LKM)
+3. `monitor_ioctl.h` — shared ioctl definitions between user and kernel space
 4. At least two workload/test programs used for memory and scheduling demonstrations
-5. `Makefile`
-6. `README.md` with:
-   - Team members with SRNs
-   - Build/load/run instructions
-   - A Demo with screenshots demonstrating all the features
-   - Design decisions for the five analysis areas above
-   - Reasoning evidence for major synchronization and IPC choices
-   - Scheduler experiment results with observations
+5. `Makefile` — must support building all of the above with a single `make`
+6. `README.md`
 
----
+#### `README.md`
 
-### Reference Run Sequence
+**1. Team Information**
+
+- Team member names with SRNs
+
+**2. Build, Load, and Run Instructions**
+
+- Step-by-step commands to build the project, load the kernel module, and start the supervisor
+- How to launch containers, run workloads, and use the CLI
+- How to unload the module and clean up
+- These must be complete enough that we can reproduce your setup from scratch on a fresh Ubuntu 22.04/24.04 VM
+
+The following is a reference run sequence you can use as a starting point:
 
 ```bash
 # Build
@@ -281,16 +290,35 @@ To run helper binaries inside the container, copy them into `rootfs/` before lau
 cp workload_binary ./rootfs/
 ```
 
----
+**3. Demo with Screenshots**
 
-### Demo Expectations
+You must provide annotated screenshots that demonstrate each of the following. Each screenshot must include a very brief caption explaining what it shows.
 
-During demo/viva, all demonstration sections of each task must be covered:
+| #   | What to Demonstrate         | What the Screenshot Must Show                                                                                                             |
+| --- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Multi-container supervision | Two or more containers running under one supervisor process                                                                               |
+| 2   | Metadata tracking           | Output of the `ps` command showing tracked container metadata                                                                             |
+| 3   | Bounded-buffer logging      | Log file contents captured through the logging pipeline, and evidence of the pipeline operating (e.g., producer/consumer activity)        |
+| 4   | CLI and IPC                 | A CLI command being issued and the supervisor responding, demonstrating the second IPC mechanism                                          |
+| 5   | Soft-limit warning          | `dmesg` or log output showing a soft-limit warning event for a container                                                                  |
+| 6   | Hard-limit enforcement      | `dmesg` or log output showing a container being killed after exceeding its hard limit, and the supervisor metadata reflecting the kill    |
+| 7   | Scheduling experiment       | Terminal output or measurements from at least one scheduling experiment, with observable differences between configurations               |
+| 8   | Clean teardown              | Evidence that containers are reaped, threads exit, and no zombies remain after shutdown (e.g., `ps aux` output, supervisor exit messages) |
 
-1. Show two containers running under one supervisor
-2. Show metadata tracking through the `ps` command
-3. Show logging behavior through the bounded-buffer pipeline and log files
-4. Show the second IPC mechanism being used by the CLI and supervisor
-5. Show soft-limit warning behavior and hard-limit enforcement
-6. Show one scheduling experiment and explain the observed result
-7. Explain design choices and one tradeoff for each major subsystem
+**4. Engineering Analysis**
+
+Address the five areas described in the [Engineering Analysis](#engineering-analysis) section above. This is not a description of what you coded — it is an explanation of _why the OS works this way_ and how your project exercises those mechanisms.
+
+**5. Design Decisions and Tradeoffs**
+
+For each major subsystem (namespace isolation, supervisor architecture, IPC/logging, kernel monitor, scheduling experiments), explain:
+
+- The design choice you made
+- One concrete tradeoff of that choice
+- Your justification for why it was the right call
+
+**6. Scheduler Experiment Results**
+
+- Present raw data or measurements from your experiments
+- Include at least one comparison (e.g., table or side-by-side output)
+- Explain what the results show about Linux scheduling behavior
