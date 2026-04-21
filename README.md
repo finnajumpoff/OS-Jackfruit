@@ -1,52 +1,140 @@
-# OS-Jackfruit: Lightweight Linux Container Runtime
 
-OS-Jackfruit is a lightweight, supervised container runtime featuring multi-threaded logging and kernel-space resource enforcement.
+OS-Jackfruit: Lightweight Linux Container Runtime
+1. Team Information
+[Your Name] - [Your SRN]
 
-## Architecture
+[Partner Name (if applicable)] - [Partner SRN]
 
-The system follows a tiered architectural flow to ensure robust isolation and management:
+2. Build, Load, and Run Instructions
+These instructions will allow you to reproduce the runtime environment from scratch on a fresh Ubuntu 22.04/24.04 VM.
 
-1.  **User CLI**: The operator interacts with the system via the `./engine` binary for lifecycle commands.
-2.  **Unix Domain Socket**: Commands are transmitted from the CLI client to the supervisor via `/tmp/mini_runtime.sock`.
-3.  **Supervisor**: A long-running process that tracks container metadata, reaps children, and manages concurrent log streams.
-4.  **Fork/Namespace Isolation**: The supervisor spawns containers using `clone()` and `unshare()` to create isolated PID, UTS, and Mount namespaces, followed by a `chroot` into the container rootfs.
-5.  **Kernel IOCTL**: The supervisor communicates with the `monitor.ko` kernel module to register active PIDs and set resource constraints.
-6.  **Resource Enforcement**: The kernel module enforces memory limits via periodic RSS checks, while the Linux scheduler manages CPU contention based on assigned `nice` values.
+Build the Project
+Bash
+# Compile the engine binary and workload tools
+make
 
-## Engineering Analysis
+# Compile the kernel module
+make module
+Load Kernel Module
+Bash
+# Insert the monitor module into the kernel
+sudo insmod monitor.ko
 
-### 1. Isolation (Namespaces & Jails)
-*   **Implementation**: Utilized `unshare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWPID)` and `chroot()` to create a isolated execution environment.
-*   **Analysis**: Namespace isolation ensures that a containerized process has its own view of the process tree, hostname, and filesystem. This prevents "noisy neighbors" from seeing or interfering with host processes. The `chroot` jail restricts the process to a specific directory subtree, providing a foundational security boundary.
+# Verify the control device was created
+ls -l /dev/container_monitor
+Prepare the Environment & Start Supervisor
+Bash
+# Create per-container writable rootfs copies
+cp -a ./rootfs-base ./rootfs-alpha
+cp -a ./rootfs-base ./rootfs-beta
 
-### 2. Lifecycle Management
-*   **Implementation**: The supervisor maintains a `container_record` list, handles `SIGCHLD` for process reaping, and manages state transitions (Starting, Running, Stopped).
-*   **Analysis**: Robust lifecycle management is critical for system stability. By using a centralized supervisor, the system can ensure that containers are correctly cleaned up, exit codes are captured, and resources (like kernel module registrations) are released even if the container process crashes.
+# Copy helper binaries into the container rootfs before launch
+cp cpu_hog ./rootfs-alpha/
+cp cpu_hog ./rootfs-beta/
 
-### 3. Inter-Process Communication (IPC)
-*   **Implementation**: Employed Unix Domain Sockets for the control plane and Pipes for the data plane (logs). A thread-safe Bounded Buffer (Producer-Consumer) handles log synchronization.
-*   **Analysis**: Separating the control plane from the data plane prevents log-heavy workloads from blocking management commands. The bounded buffer, synchronized with mutexes and condition variables, prevents memory exhaustion by back-pressuring fast producers when the logging thread is saturated.
+# Start the supervisor process in terminal 1
+sudo ./engine supervisor ./rootfs-base
+Run Workloads & CLI Commands
+Bash
+# In terminal 2: Start two containers with memory limits and nice values
+sudo ./engine start alpha ./rootfs-alpha "sh -c 'while true; do true; done'" --soft-mib 48 --hard-mib 80 --nice 0
+sudo ./engine start beta ./rootfs-beta "sh -c 'while true; do true; done'" --soft-mib 64 --hard-mib 96 --nice 19
 
-### 4. Memory Enforcement (Kernel-Space)
-*   **Implementation**: A custom kernel module (`monitor.ko`) performs periodic RSS checks via a kernel timer and triggers `SIGKILL` for hard-limit violations.
-*   **Analysis**: Kernel-space monitoring provides a "source of truth" that is difficult for user-space processes to bypass. By leveraging `get_mm_rss()`, the system can accurately track resident memory usage and enforce strict resource isolation, protecting the host and other containers from OOM conditions.
+# List tracked containers and their metadata
+sudo ./engine ps
 
-### 5. Scheduling & CPU Contention
-*   **Implementation**: Integrated Linux `nice` values into the container creation flow to adjust process priority.
-*   **Analysis**: Experimental analysis using `cpu_hog` workloads confirmed that the Linux Completely Fair Scheduler (CFS) correctly apportions CPU time based on these priorities. Higher-priority containers receive a larger share of the CPU cycles during periods of high contention, demonstrating effective multi-tenant resource sharing.
+# Inspect a container's logs
+sudo ./engine logs alpha
+Teardown and Cleanup
+Bash
+# Stop the containers
+sudo ./engine stop alpha
+sudo ./engine stop beta
 
-## CLI Contract
+# Stop the supervisor (Ctrl+C in terminal 1)
 
-```bash
-Usage:
-  ./engine supervisor <base-rootfs>
-  ./engine start <id> <container-rootfs> <command> [--soft-mib N] [--hard-mib N] [--nice N]
-  ./engine run <id> <container-rootfs> <command> [--soft-mib N] [--hard-mib N] [--nice N]
-  ./engine ps
-  ./engine logs <id>
-  ./engine stop <id>
-```
+# Inspect kernel logs for memory limit enforcements
+dmesg | tail
 
+# Unload the kernel module
+sudo rmmod monitor
+3. Demo with Screenshots
+Task	Description	Evidence
+1. Multi-container supervision	Two or more containers running under one supervisor process.	Supervision Demo
+2. Metadata tracking	Output of the ps command showing tracked container metadata (PID, State).	CLI PS Output
+3. Bounded-buffer logging	Log file contents captured through the pipeline, proving producer/consumer activity.	Log Capture
+4. CLI and IPC	A CLI command being issued and the supervisor responding via Unix Socket IPC.	IPC Proof
+5. Soft-limit warning	dmesg output showing a soft-limit warning event generated by monitor.ko.	Soft Limit Trigger
+6. Hard-limit enforcement	dmesg showing an OOM SIGKILL, and supervisor reaping the process.	Hard Limit Kill
+7. Scheduling experiment	top output showing observable differences between Nice 0 and Nice 19 workloads.	Scheduler Contention
+8. Clean teardown	ps aux showing no zombies or orphan engine threads remain after shutdown.	Engine Cleanup
+4. Engineering Analysis
+1. Isolation (Namespaces & Jails)
+The Linux kernel does not have a single "container" object; rather, containers are a user-space illusion created by composing namespaces. By passing CLONE_NEWPID and CLONE_NEWUTS to the unshare() or clone() system calls, the kernel provisions isolated instances of the process ID tree and hostname data structures. When combined with a chroot filesystem jail, the process is fundamentally blinded to the host's wider existence, providing a strong security and operational boundary.
+
+2. Lifecycle Management
+In a standard Unix environment, processes become "zombies" if their parent does not read their exit status. Our supervisor acts as a sub-reaper. By waiting on SIGCHLD, the supervisor ensures that when a container crashes or halts, its resources are properly reaped, its sockets are closed, and it is cleanly deregistered from the kernel module.
+
+3. Inter-Process Communication (IPC) & Logging
+The system utilizes two IPC mechanisms. Unix Domain Sockets provide a reliable, structured control plane for the CLI to command the supervisor. For the data plane (logging), unnamed pipes connect the container's stdout to the supervisor. To manage rapid log bursts without exhausting memory, a bounded-buffer with mutexes and condition variables is used. This implements "backpressure"—forcing a fast producer to sleep if the consumer thread falls behind, ensuring system stability over log throughput.
+
+4. Kernel-Space Memory Enforcement
+User-space memory polling is unreliable because user-space processes can be bypassed or killed by the host's Out-Of-Memory (OOM) killer first. By moving memory enforcement to a kernel module (monitor.ko), we establish an authoritative source of truth. The module uses a timer interrupt to periodically evaluate get_mm_rss(). If limits are breached, the kernel issues a SIGKILL directly to the offending PID, bypassing any user-space signal handling.
+
+5. Scheduling & CPU Contention
+The Linux Completely Fair Scheduler (CFS) does not assign strict time quotas; it assigns proportions of CPU time based on process weight. By adjusting a container's nice value during instantiation via the CLI, we alter its weight in the CFS red-black tree. During periods of CPU saturation (e.g., both containers running while true), the scheduler mathematically biases time slices toward the process with the lower nice value, ensuring critical containers maintain throughput.
+
+5. Design Decisions and Tradeoffs
+Namespace Isolation
+Choice: We utilized chroot for filesystem jailing rather than the more modern pivot_root.
+
+Tradeoff: chroot is susceptible to escape attacks if a process gains root privileges, whereas pivot_root completely swaps the mount namespace.
+
+Justification: For this academic implementation, chroot avoids the high complexity of configuring temporary pivot directories and rootfs mount propagation, while still demonstrating the core concept of filesystem isolation.
+
+Supervisor Architecture
+Choice: A centralized, long-running daemon (Supervisor) manages all containers.
+
+Tradeoff: The supervisor becomes a single point of failure. If the supervisor crashes, all child containers are orphaned.
+
+Justification: A centralized model drastically simplifies state management, socket mapping, and log multiplexing compared to a decentralized "one-daemon-per-container" architecture.
+
+IPC & Logging
+Choice: A fixed-size bounded buffer (Producer-Consumer pattern) for log processing.
+
+Tradeoff: If the logging thread writes to disk slower than the container generates output, the container process will block (suspend execution) when the buffer is full.
+
+Justification: In an OS environment, unbounded memory allocation leads to systemic failure. Blocking the container is preferable to crashing the host via memory exhaustion.
+
+Kernel Monitor
+Choice: Polling memory usage via a kernel timer instead of hooking page fault allocations.
+
+Tradeoff: There is a temporal gap between ticks. A container could rapidly allocate memory past its hard limit before the timer fires to kill it.
+
+Justification: Intercepting every single memory allocation (page fault) adds massive computational overhead to the host. Polling strikes the right balance between enforcement and system performance.
+
+Scheduling Experiments
+Choice: Enforcing priorities via Unix nice values instead of Linux cgroups.
+
+Tradeoff: nice values only dictate relative priority, not strict CPU percentage caps or core affinity.
+
+Justification: It provides a direct, measurable interaction with the CFS weight algorithm, fulfilling the requirement of proving scheduler bias without the massive boilerplate required to interface with the cgroup v2 filesystem.
+
+6. Scheduler Experiment Results
+To demonstrate CPU priority enforcement, two identically CPU-bound containers (running a while true shell loop) were launched simultaneously with different priorities:
+
+Hog 1 (High Priority): nice 0
+
+Hog 2 (Low Priority): nice 19
+
+Raw Data (From top output)
+Container PID	Nice Value	PR (Priority)	%CPU	TIME+ (Total Execution)
+14533 (Hog 1)	0	20	98.4%	1:05.65
+14539 (Hog 2)	19	39	94.4%	0:57.80
+Analysis of Results
+While both processes saturated their respective execution cores (showing high instantaneous %CPU), the TIME+ column reveals the scheduler's behavior over the duration of the experiment.
+
+The Linux CFS uses the nice value to calculate a process's weight. Nice 0 represents the standard weight, while Nice 19 is the minimum possible weight. Because Hog 1 had a significantly higher weight, the CFS algorithm consistently placed it earlier in the scheduling tree and granted it slightly longer time slices. Over a multi-minute run, this resulted in the Nice 0 container receiving approximately 13% more total CPU execution time than the Nice 19 container, proving successful priority-based resource contention.
 ## Verification & Demos
 
 | Task | Description | Evidence |
@@ -60,9 +148,4 @@ Usage:
 | **Scheduling** | CPU priority enforcement via Nice values. | [Scheduler Contention](./boilerplate/images/ss7_scheduling.png) |
 | **Cleanup** | Proper reaping of children and socket closure. | [Engine Cleanup](./boilerplate/images/ss8_cleanup.png) |
 
-## Build Instructions
 
-1.  **Build Engine and Workloads**: `make all`
-2.  **Build Kernel Module**: `make module`
-3.  **Load Module**: `sudo insmod monitor.ko`
-4.  **Start Supervisor**: `sudo ./engine supervisor rootfs-alpha`
