@@ -1,8 +1,8 @@
 # OS-Jackfruit: Lightweight Linux Container Runtime
 
 ## 1. Team Information
-* **[Your Name]** - [Your SRN]
-* **[Partner Name (if applicable)]** - [Partner SRN]
+* **[kanchhit kumar]** - [PES1UG24CS213]
+* **[Mahit ]** - [PES1UG24CS231]
 
 ---
 
