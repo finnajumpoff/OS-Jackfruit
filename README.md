@@ -1,133 +1,68 @@
-# OS-Jackfruit: Multi-Container Runtime & Kernel Monitor
-**Team Name:** finnajumpoff  
-**Team Members:** kanchhit (SRN: PES1UG24CS213) mahit (SRN:PES1UG24CS231)
+# OS-Jackfruit: Lightweight Linux Container Runtime
 
----
+OS-Jackfruit is a lightweight, supervised container runtime featuring multi-threaded logging and kernel-space resource enforcement.
 
-## 1. Project Overview
-This project is a lightweight Linux container runtime consisting of a user-space supervisor (`engine`) and a kernel-space memory monitor (`monitor.ko`). It demonstrates process isolation through namespaces, concurrent logging via a bounded buffer, and kernel-level resource enforcement using `ioctl`.
+## Architecture
 
----
+The system follows a tiered architectural flow to ensure robust isolation and management:
 
-## 2. Build, Load, and Run Instructions
+1.  **User CLI**: The operator interacts with the system via the `./engine` binary for lifecycle commands.
+2.  **Unix Domain Socket**: Commands are transmitted from the CLI client to the supervisor via `/tmp/mini_runtime.sock`.
+3.  **Supervisor**: A long-running process that tracks container metadata, reaps children, and manages concurrent log streams.
+4.  **Fork/Namespace Isolation**: The supervisor spawns containers using `clone()` and `unshare()` to create isolated PID, UTS, and Mount namespaces, followed by a `chroot` into the container rootfs.
+5.  **Kernel IOCTL**: The supervisor communicates with the `monitor.ko` kernel module to register active PIDs and set resource constraints.
+6.  **Resource Enforcement**: The kernel module enforces memory limits via periodic RSS checks, while the Linux scheduler manages CPU contention based on assigned `nice` values.
 
-### Pre-requisites
-Ensure you have installed the necessary headers for kernel module development:
+## Engineering Analysis
+
+### 1. Isolation (Namespaces & Jails)
+*   **Implementation**: Utilized `unshare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWPID)` and `chroot()` to create a isolated execution environment.
+*   **Analysis**: Namespace isolation ensures that a containerized process has its own view of the process tree, hostname, and filesystem. This prevents "noisy neighbors" from seeing or interfering with host processes. The `chroot` jail restricts the process to a specific directory subtree, providing a foundational security boundary.
+
+### 2. Lifecycle Management
+*   **Implementation**: The supervisor maintains a `container_record` list, handles `SIGCHLD` for process reaping, and manages state transitions (Starting, Running, Stopped).
+*   **Analysis**: Robust lifecycle management is critical for system stability. By using a centralized supervisor, the system can ensure that containers are correctly cleaned up, exit codes are captured, and resources (like kernel module registrations) are released even if the container process crashes.
+
+### 3. Inter-Process Communication (IPC)
+*   **Implementation**: Employed Unix Domain Sockets for the control plane and Pipes for the data plane (logs). A thread-safe Bounded Buffer (Producer-Consumer) handles log synchronization.
+*   **Analysis**: Separating the control plane from the data plane prevents log-heavy workloads from blocking management commands. The bounded buffer, synchronized with mutexes and condition variables, prevents memory exhaustion by back-pressuring fast producers when the logging thread is saturated.
+
+### 4. Memory Enforcement (Kernel-Space)
+*   **Implementation**: A custom kernel module (`monitor.ko`) performs periodic RSS checks via a kernel timer and triggers `SIGKILL` for hard-limit violations.
+*   **Analysis**: Kernel-space monitoring provides a "source of truth" that is difficult for user-space processes to bypass. By leveraging `get_mm_rss()`, the system can accurately track resident memory usage and enforce strict resource isolation, protecting the host and other containers from OOM conditions.
+
+### 5. Scheduling & CPU Contention
+*   **Implementation**: Integrated Linux `nice` values into the container creation flow to adjust process priority.
+*   **Analysis**: Experimental analysis using `cpu_hog` workloads confirmed that the Linux Completely Fair Scheduler (CFS) correctly apportions CPU time based on these priorities. Higher-priority containers receive a larger share of the CPU cycles during periods of high contention, demonstrating effective multi-tenant resource sharing.
+
+## CLI Contract
+
 ```bash
-sudo apt update && sudo apt install -y build-essential linux-headers-$(uname -r)
+Usage:
+  ./engine supervisor <base-rootfs>
+  ./engine start <id> <container-rootfs> <command> [--soft-mib N] [--hard-mib N] [--nice N]
+  ./engine run <id> <container-rootfs> <command> [--soft-mib N] [--hard-mib N] [--nice N]
+  ./engine ps
+  ./engine logs <id>
+  ./engine stop <id>
+```
 
-Build Phase
-Bash
+## Verification & Demos
 
-# Compiles the engine, workload hogs, and the kernel module
-make engine module memory_hog cpu_hog io_pulse
+| Task | Description | Evidence |
+| :--- | :--- | :--- |
+| **Namespace (UTS)** | Isolated Hostname and UTS namespace proof. | [Hostname Isolation](./boilerplate/images/ss1_supervision.pn) |
+| **Namespace (PID)** | Process isolation (PID 1) and metadata check. | [PID Isolation](./boilerplate/images/ss2_metadata.png) |
+| **Logging** | Multi-threaded logs captured in `logs/<id>.log`. | [Log Capture](./boilerplate/images/ss3_logging.png) |
+| **CLI / IPC** | Supervisor communication via Unix Domain Sockets. | [CLI IPC Proof](./boilerplate/images/ss4_cli_ipc.png) |
+| **Memory (Soft)** | Kernel module issues warning at soft limit. | [Soft Limit Warning](./boilerplate/images/ss5_soft_limit.png) |
+| **Memory (Hard)** | Kernel module kills process at hard limit (OOM). | [Hard Limit Kill](./boilerplate/images/ss6_hard_limit.png) |
+| **Scheduling** | CPU priority enforcement via Nice values. | [Scheduler Contention](./boilerplate/images/ss7_scheduling.png) |
+| **Cleanup** | Proper reaping of children and socket closure. | [Engine Cleanup](./boilerplate/images/ss8_cleanup.png) |
 
-Loading the Kernel Monitor
-Bash
+## Build Instructions
 
-sudo insmod monitor.ko
-# Verify the control device is created
-ls -l /dev/container_monitor
-
-Execution Sequence
-
-    Start the Supervisor (Terminal 1):
-    Bash
-
-    sudo ./engine supervisor rootfs-base
-
-    Launch a Container (Terminal 2):
-    Bash
-
-    # Note: Copy workloads into the rootfs before starting for filesystem isolation
-    cp memory_hog rootfs-alpha/
-    sudo ./engine start alpha-box rootfs-alpha "./memory_hog 100" --soft-mib 20 --hard-mib 50
-
-    Operations:
-
-        List metadata: sudo ./engine ps
-
-        View persistent logs: cat logs/alpha-box.log
-
-        Graceful Stop: sudo ./engine stop alpha-box
-
-        Teardown: sudo rmmod monitor
-
-3. Engineering Analysis
-1. Isolation Mechanisms
-
-Isolation is achieved using Linux Namespaces and chroot.
-
-    PID Namespace: Isolates the process ID view, making the container process PID 1 within its own world.
-
-    UTS Namespace: Provides an independent hostname via sethostname().
-
-    Mount Namespace & chroot: Jails the process into a private root filesystem (e.g., rootfs-alpha), ensuring it cannot access host files unless explicitly copied into the jail.
-
-    Kernel Sharing: While isolated, containers still share the host kernel's system clock and core scheduling logic.
-
-2. Supervisor and Process Lifecycle
-
-The long-running Supervisor acts as the central manager:
-
-    Reaping: It handles SIGCHLD signals to clean up exited children, preventing zombie processes.
-
-    Metadata: It tracks the state (STARTING, RUNNING, KILLED, EXITED) and host PIDs for all active containers.
-
-    Signals: It handles SIGINT/SIGTERM to perform an orderly shutdown of all logging threads and child processes.
-
-3. IPC, Threads, and Synchronization
-
-The architecture utilizes two distinct IPC paths:
-
-    Control Plane (Unix Domain Sockets): Used for bidirectional CLI-to-Supervisor communication.
-
-    Logging Plane (Pipes): Container output (stdout/stderr) is captured via pipes and fed into a Bounded Buffer.
-
-    Synchronization: We used Mutexes and Condition Variables to implement a Producer-Consumer pattern. This prevents log loss and ensures the supervisor does not crash if a container generates output faster than the disk can write it.
-
-4. Memory Management and Enforcement
-
-RSS (Resident Set Size) measures the actual physical RAM allocated to a process.
-
-    Soft Limit: The kernel module logs a warning in dmesg when the process first breaches this threshold.
-
-    Hard Limit: The kernel module issues a SIGKILL once the limit is exceeded.
-
-    Justification: Enforcement resides in kernel space to ensure it cannot be bypassed by user-space processes and to provide more efficient, timer-based monitoring.
-
-5. Scheduling Behavior
-
-Experiments with cpu_hog demonstrated Linux scheduling priorities:
-
-    Nice Values: By assigning different nice values (e.g., 0 vs 10), we observed the scheduler granting significantly more CPU time to the higher-priority task.
-
-    I/O Wait: io_pulse demonstrated how I/O-bound tasks yield the CPU, allowing the scheduler to optimize for system responsiveness.
-
-4. Design Decisions and Tradeoffs
-
-    Spinlock vs Mutex: We used a Spinlock in the kernel module because the timer callback runs in an atomic interrupt context where sleeping (mutex) is prohibited.
-
-    Bounded Buffer Capacity: A buffer size of 10 was chosen to balance memory footprint with logging throughput.
-
-    Unix Sockets: Chosen for the CLI contract to support complex, bidirectional request-response messages more effectively than FIFOs.
-
-5. Final Checklist & Demo Proof
-
-    [x] Multi-container: Supervisor successfully manages multiple IDs (alpha, beta, etc.).
-
-    [x] Log capture: Verified via cat logs/[id].log.
-
-    [x] Hard-limit: Verified via dmesg kill logs.
-
-    [x] CLI Contract: Verified via engine ps and engine stop commands.
-
-    [x] Cleanup: Verified no zombies remain and rmmod succeeds.
-
-
-### Final Step for You:
-1. Copy the code block above.
-2. Open your `README.md` file in your editor.
-3. Replace the contents with this code.
-4. Fill in your **SRN** and **Partner's name** at the top.
-5. Push to GitHub!
+1.  **Build Engine and Workloads**: `make all`
+2.  **Build Kernel Module**: `make module`
+3.  **Load Module**: `sudo insmod monitor.ko`
+4.  **Start Supervisor**: `sudo ./engine supervisor rootfs-alpha`
