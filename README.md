@@ -51,14 +51,14 @@ Usage:
 
 | Task | Description | Evidence |
 | :--- | :--- | :--- |
-| **Namespace (UTS)** | Isolated Hostname and UTS namespace proof. | [Hostname Isolation](./boilerplate/images/ss1_supervision.pn) |
-| **Namespace (PID)** | Process isolation (PID 1) and metadata check. | [PID Isolation](./boilerplate/images/ss2_metadata.png) |
-| **Logging** | Multi-threaded logs captured in `logs/<id>.log`. | [Log Capture](./boilerplate/images/ss3_logging.png) |
-| **CLI / IPC** | Supervisor communication via Unix Domain Sockets. | [CLI IPC Proof](./boilerplate/images/ss4_cli_ipc.png) |
-| **Memory (Soft)** | Kernel module issues warning at soft limit. | [Soft Limit Warning](./boilerplate/images/ss5_soft_limit.png) |
-| **Memory (Hard)** | Kernel module kills process at hard limit (OOM). | [Hard Limit Kill](./boilerplate/images/ss6_hard_limit.png) |
-| **Scheduling** | CPU priority enforcement via Nice values. | [Scheduler Contention](./boilerplate/images/ss7_scheduling.png) |
-| **Cleanup** | Proper reaping of children and socket closure. | [Engine Cleanup](./boilerplate/images/ss8_cleanup.png) |
+| **Namespace (UTS)** | Isolated Hostname and UTS namespace proof. | [Hostname Isolation](./images/ss1_supervision.png) |
+| **Namespace (PID)** | Process isolation (PID 1) and metadata check. | [PID Isolation](./images/ss2_metadata.png) |
+| **Logging** | Multi-threaded logs captured in `logs/<id>.log`. | [Log Capture](./images/ss3_logging.png) |
+| **CLI / IPC** | Supervisor communication via Unix Domain Sockets. | [CLI IPC Proof](./images/ss4_cli_ipc.png) |
+| **Memory (Soft)** | Kernel module issues warning at soft limit. | [Soft Limit Warning](./images/ss5_soft_limit.png) |
+| **Memory (Hard)** | Kernel module kills process at hard limit (OOM). | [Hard Limit Kill](./images/ss6_hard_limit.png) |
+| **Scheduling** | CPU priority enforcement via Nice values. | [Scheduler Contention](./images/ss7_scheduling.png) |
+| **Cleanup** | Proper reaping of children and socket closure. | [Engine Cleanup](./images/ss8_cleanup.png) |
 
 ## Build Instructions
 
