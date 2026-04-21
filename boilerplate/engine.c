@@ -1,18 +1,9 @@
 /*
  * engine.c - Supervised Multi-Container Runtime (User Space)
  *
- * Intentionally partial starter:
- *   - command-line shape is defined
- *   - key runtime data structures are defined
- *   - bounded-buffer skeleton is defined
- *   - supervisor / client split is outlined
- *
- * Students are expected to design:
- *   - the control-plane IPC implementation
- *   - container lifecycle and metadata synchronization
- *   - clone + namespace setup for each container
- *   - producer/consumer behavior for log buffering
- *   - signal handling and graceful shutdown
+ * This runtime manages container lifecycles, provides namespace isolation,
+ * implements multi-threaded logging, and integrates with the kernel-space
+ * memory monitor.
  */
 
 #define _GNU_SOURCE
@@ -732,6 +723,9 @@ static int run_supervisor(const char *rootfs)
                 if (rec) {
                     kill(rec->host_pid, SIGTERM);
                     rec->state = CONTAINER_STOPPED;
+                    if (ctx.monitor_fd >= 0) {
+                        unregister_from_monitor(ctx.monitor_fd, rec->id, rec->host_pid);
+                    }
                 } else {
                     res.status = -1;
                     strcpy(res.message, "Container not found");
@@ -755,6 +749,18 @@ static int run_supervisor(const char *rootfs)
     }
 
     printf("Supervisor shutting down...\n");
+    
+    // Unregister all containers from monitor
+    pthread_mutex_lock(&ctx.metadata_lock);
+    container_record_t *curr = ctx.containers;
+    while (curr) {
+        if (ctx.monitor_fd >= 0) {
+            unregister_from_monitor(ctx.monitor_fd, curr->id, curr->host_pid);
+        }
+        curr = curr->next;
+    }
+    pthread_mutex_unlock(&ctx.metadata_lock);
+
     bounded_buffer_begin_shutdown(&ctx.log_buffer);
     pthread_join(ctx.logger_thread, NULL);
     bounded_buffer_destroy(&ctx.log_buffer);
@@ -870,17 +876,6 @@ static int cmd_ps(void)
     memset(&req, 0, sizeof(req));
     req.kind = CMD_PS;
 
-    /*
-     * TODO:
-     * The supervisor should respond with container metadata.
-     * Keep the rendering format simple enough for demos and debugging.
-     */
-    printf("Expected states include: %s, %s, %s, %s, %s\n",
-           state_to_string(CONTAINER_STARTING),
-           state_to_string(CONTAINER_RUNNING),
-           state_to_string(CONTAINER_STOPPED),
-           state_to_string(CONTAINER_KILLED),
-           state_to_string(CONTAINER_EXITED));
     return send_control_request(&req);
 }
 

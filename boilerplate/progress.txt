@@ -12,3 +12,17 @@ Task 3: CLI
 - What: Implemented CLI commands 'start', 'stop', and 'ps' (status) using a UNIX domain socket for control-plane IPC. The supervisor manages container metadata and lifecycle.
 - Why: A dedicated control-plane (socket) allows the operator to manage containers independently of their log streams. Metadata tracking allows for lifecycle management (monitoring, reaping, stopping).
 - Verification: Start supervisor. Run './engine start c1 rootfs-alpha "sleep 100"'. Run './engine ps'. Run './engine stop c1'.
+
+Task 4: Kernel Module
+- What: Implemented a kernel module `monitor.ko` that uses `ioctl` to register/unregister PIDs and enforce memory limits. It uses a periodic timer to check RSS and sends SIGKILL to processes exceeding hard limits.
+- Why: Kernel-space monitoring is more efficient and harder for a containerized process to evade. It leverages kernel APIs (like `get_mm_rss`) to accurately track resident memory and enforce resource constraints (isolation).
+- Verification: Run 'make' to build engine and module. Load module: 'sudo insmod monitor.ko'. Check dmesg: 'dmesg | tail'. Start supervisor and a memory-heavy container. Check 'dmesg' for limit violations.
+
+Task 5: Experiments
+- What: Analyzed resource contention using `cpu_hog` (CPU-bound) and `io_pulse` (I/O-bound) workloads.
+- Why: `cpu_hog` creates CPU saturation, testing the Linux scheduler's ability to share time slices or enforce priorities (nice values). `io_pulse` tests I/O wait and responsiveness, showing how processes that yield the CPU (during sleep or sync) are treated compared to greedy CPU-bound tasks.
+- Verification (CPU Stress Test):
+  1. Terminal 1: `./engine supervisor rootfs-alpha`
+  2. Terminal 2: `./engine start hog1 rootfs-alpha "/cpu_hog 30" --nice 0`
+  3. Terminal 3: `./engine start hog2 rootfs-alpha "/cpu_hog 30" --nice 10`
+  4. Terminal 4: Run `top -p $(pgrep -d',' cpu_hog)` and observe the %CPU difference. hog1 should receive significantly more CPU time than hog2.
