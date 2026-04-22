@@ -2,7 +2,7 @@
 
 ## 1. Team Information
 * **[kanchhit kumar]** - [PES1UG24CS213]
-* **[Mahit ]** - [PES1UG24CS231]
+* **[Mahit ]** - [PES1UG24CS241]
 
 ---
 
